@@ -9,39 +9,50 @@ import time
 import json
 import argparse
 from datetime import datetime
+from pi3.utils.checkpoint import load_checkpoint_state, resolve_checkpoint
+from pi3.utils.device import (
+    autocast,
+    empty_cache,
+    get_amp_dtype,
+    get_device_name,
+    get_total_memory,
+    max_memory_allocated,
+    memory_allocated,
+    oom_errors,
+    reset_peak_memory_stats,
+    resolve_device,
+    synchronize,
+)
 
 
-def clear_gpu():
+def clear_gpu(device=None):
     gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
+    empty_cache(device)
+    reset_peak_memory_stats(device)
 
 
 def try_forward(model, model_type, n_images, H, W, device, dtype):
     """Try a forward pass with n_images. Returns (success, peak_vram_mb, elapsed_sec)."""
-    clear_gpu()
+    clear_gpu(device)
     try:
         imgs = torch.rand(1, n_images, 3, H, W, device=device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        synchronize(device)
         t0 = time.perf_counter()
         with torch.no_grad():
-            with torch.amp.autocast('cuda', dtype=dtype):
+            with autocast(device, dtype=dtype):
                 if model_type == "pi3":
                     _ = model(imgs)
                 else:
                     _ = model(imgs=imgs)
-        torch.cuda.synchronize()
+        synchronize(device)
         elapsed = time.perf_counter() - t0
-        peak_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        peak_mb = max_memory_allocated(device) / (1024 ** 2)
         del imgs, _
-        clear_gpu()
+        clear_gpu(device)
         return True, peak_mb, elapsed
-    except torch.cuda.OutOfMemoryError:
-        clear_gpu()
-        return False, -1, -1
-    except RuntimeError as e:
+    except oom_errors(device) as e:
         if "out of memory" in str(e).lower():
-            clear_gpu()
+            clear_gpu(device)
             return False, -1, -1
         raise
 
@@ -71,13 +82,11 @@ def probe_max_images(model, model_type, H, W, device, dtype, max_n=8192):
 def load_model(model_type, ckpt, use_mm, device):
     if model_type == "pi3x":
         from pi3.models.pi3x import Pi3X
+        ckpt = resolve_checkpoint("pi3x", ckpt)
         if ckpt is not None:
+            print(f"Loading checkpoint: {ckpt}")
             model = Pi3X(use_multimodal=use_mm).eval()
-            if ckpt.endswith('.safetensors'):
-                from safetensors.torch import load_file
-                weight = load_file(ckpt)
-            else:
-                weight = torch.load(ckpt, map_location=device, weights_only=False)
+            weight = load_checkpoint_state(ckpt)
             model.load_state_dict(weight, strict=False)
         else:
             model = Pi3X.from_pretrained("yyfz233/Pi3X").eval()
@@ -85,13 +94,11 @@ def load_model(model_type, ckpt, use_mm, device):
                 model.disable_multimodal()
     elif model_type == "pi3":
         from pi3.models.pi3 import Pi3
+        ckpt = resolve_checkpoint("pi3", ckpt)
         if ckpt is not None:
+            print(f"Loading checkpoint: {ckpt}")
             model = Pi3().eval()
-            if ckpt.endswith('.safetensors'):
-                from safetensors.torch import load_file
-                weight = load_file(ckpt)
-            else:
-                weight = torch.load(ckpt, map_location=device, weights_only=False)
+            weight = load_checkpoint_state(ckpt)
             model.load_state_dict(weight)
         else:
             model = Pi3.from_pretrained("yyfz233/Pi3").eval()
@@ -105,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark Pi3/Pi3X capacity at different resolutions")
     parser.add_argument("--model", type=str, default="pi3x", choices=["pi3", "pi3x"],
                         help="Model type (default: pi3x)")
-    parser.add_argument("--device", type=str, default="cuda", help="Inference device")
+    parser.add_argument("--device", type=str, default="auto", help="Inference device")
     parser.add_argument("--ckpt", type=str, default=None, help="Checkpoint path (default: HuggingFace)")
     parser.add_argument("--multimodal", action="store_true",
                         help="[pi3x only] Enable multimodal branch")
@@ -116,11 +123,11 @@ def main():
                         help="Save results to JSON file")
     args = parser.parse_args()
 
-    device = torch.device(args.device)
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    device = resolve_device(args.device)
+    dtype = get_amp_dtype(device)
 
-    gpu_name = torch.cuda.get_device_name(0)
-    gpu_total_mb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 2)
+    gpu_name = get_device_name(device)
+    gpu_total_mb = get_total_memory(device) / (1024 ** 2)
     gpu_total_gb = gpu_total_mb / 1024
 
     model_type = args.model
@@ -135,9 +142,9 @@ def main():
 
     print("Loading model...")
     model = load_model(model_type, args.ckpt, use_mm, device)
-    clear_gpu()
+    clear_gpu(device)
 
-    model_mem_mb = torch.cuda.memory_allocated() / (1024 ** 2)
+    model_mem_mb = memory_allocated(device) / (1024 ** 2)
     print(f"Model VRAM: {model_mem_mb:.0f} MB")
     print()
 

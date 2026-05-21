@@ -1,4 +1,12 @@
 from ..utils.geometry import homogenize_points, depth_normal_edge
+from ..utils.device import autocast, empty_cache
+from ..utils.rotation import (
+    det3,
+    polar_project_so3,
+    rotation_error_mask,
+    svd_project_so3_cpu,
+    trace3,
+)
 import torch
 import torch.nn.functional as F
 
@@ -75,7 +83,7 @@ class Pi3XVO:
                     model_kwargs['mask_add_ray'] = mask_ray
                     model_kwargs['with_prior'] = True
 
-            with torch.amp.autocast('cuda', dtype=dtype):
+            with autocast(imgs.device, dtype=dtype):
                 pred = self.model(chunk_imgs, **model_kwargs)
             
             curr_local_depth = pred['local_points'][..., 2] 
@@ -134,7 +142,7 @@ class Pi3XVO:
             if 'poses' in model_kwargs: del model_kwargs['poses']
             if 'depths' in model_kwargs: del model_kwargs['depths']
             if 'rays' in model_kwargs: del model_kwargs['rays']
-            torch.cuda.empty_cache()
+            empty_cache(imgs.device)
 
             if end_idx == T:
                 break
@@ -167,22 +175,36 @@ class Pi3XVO:
         tgt_centered = (tgt - tgt_mean) * mask
         
         H = torch.bmm(src_centered.transpose(1, 2), tgt_centered)
-        U, S, V = torch.svd(H)
-        
-        R = torch.bmm(V, U.transpose(1, 2))
-        
-        det = torch.det(R)
-        diag = torch.ones(B, 3, device=device)
-        diag[:, 2] = torch.sign(det)
-        R = torch.bmm(torch.bmm(V, torch.diag_embed(diag)), U.transpose(1, 2))
+        if H.device.type == "musa":
+            H_work = H.float()
+            rotation_input = H_work.transpose(1, 2).contiguous()
+            R = polar_project_so3(rotation_input, num_iters=12)
+            rot_bad, _, _ = rotation_error_mask(R, orth_threshold=1e-3, det_threshold=1e-3)
+            fallback_mask = (rot_bad | (det3(rotation_input) < 0)) & ~bad_mask
+            if fallback_mask.any():
+                R = R.clone()
+                R[fallback_mask] = svd_project_so3_cpu(
+                    rotation_input[fallback_mask],
+                    device=device,
+                    dtype=R.dtype,
+                )
+            trace_S = trace3(torch.bmm(R, H_work))
+        else:
+            U, S, V = torch.svd(H)
+            R = torch.bmm(V, U.transpose(1, 2))
+
+            det = torch.det(R)
+            diag = torch.ones(B, 3, device=device)
+            diag[:, 2] = torch.sign(det)
+            R = torch.bmm(torch.bmm(V, torch.diag_embed(diag)), U.transpose(1, 2))
+
+            corrected_S = S.clone()
+            corrected_S[:, 2] *= diag[:, 2]
+            trace_S = corrected_S.sum(dim=1)
         
         src_var = (src_centered ** 2).sum(dim=2) * mask.squeeze(-1)
         src_var = src_var.sum(dim=1) / (valid_cnt + eps)
-        
-        corrected_S = S.clone()
-        corrected_S[:, 2] *= diag[:, 2]
-        trace_S = corrected_S.sum(dim=1)
-        
+
         scale = trace_S / (src_var * valid_cnt + eps)
         scale = scale.view(B, 1, 1)
         

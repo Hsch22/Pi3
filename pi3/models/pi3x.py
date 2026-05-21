@@ -12,6 +12,7 @@ from .layers.attention import FlashAttentionRope
 from .layers.block import BlockRope, PoseInjectBlock
 from .layers.pos_embed import RoPE2D, PositionGetter
 from .dinov2.hub.backbones import dinov2_vitl14, dinov2_vitl14_reg
+from ..utils.device import disabled_autocast, empty_cache
 from ..utils.geometry import se3_inverse, get_pixel, homogenize_points
 from .layers.transformer_head import TransformerDecoder, ContextOnlyTransformerDecoder
 
@@ -198,8 +199,8 @@ class Pi3X(nn.Module, PyTorchModelHubMixin):
             if hasattr(self, attr):
                 delattr(self, attr)
 
-        if free_cuda_cache and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        if free_cuda_cache:
+            empty_cache()
 
 
     def forward(
@@ -291,7 +292,7 @@ class Pi3X(nn.Module, PyTorchModelHubMixin):
         hidden = self.encoder(imgs, is_training=True)["x_norm_patchtokens"]
 
         if self.use_multimodal:
-            with torch.amp.autocast(device_type='cuda', enabled=False):
+            with disabled_autocast(device):
                 if with_prior is True:
                     p_depth = p_ray = p_pose = 1.0
                 else:
@@ -410,7 +411,7 @@ class Pi3X(nn.Module, PyTorchModelHubMixin):
         # decode conf
         ret_conf = self.conf_decoder(hidden, xpos=pos)
 
-        with torch.amp.autocast(device_type='cuda', enabled=False):
+        with disabled_autocast(device):
             point_feat = ret_point[:, self.patch_start_idx:].float()
             xy, z = self._chunked_conv_head(self.point_head, point_feat, patch_h, patch_w)
             del point_feat

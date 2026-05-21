@@ -14,6 +14,8 @@ import time
 from pi3.utils.geometry import se3_inverse, homogenize_points, depth_normal_edge
 from pi3.models.pi3 import Pi3
 from pi3.utils.basic import load_images_as_tensor
+from pi3.utils.checkpoint import load_checkpoint_state, resolve_checkpoint
+from pi3.utils.device import autocast, empty_cache, get_amp_dtype, resolve_device
 
 import trimesh
 import matplotlib
@@ -274,9 +276,9 @@ def run_model(target_dir, model) -> dict:
     print(f"Processing images from {target_dir}")
 
     # Device check
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if not torch.cuda.is_available():
-        raise ValueError("CUDA is not available. Check your environment.")
+    device = resolve_device()
+    if device.type == "cpu":
+        raise ValueError("No MUSA/CUDA accelerator is available. Check your environment.")
 
     # Move model to device
     model = model.to(device)
@@ -295,9 +297,9 @@ def run_model(target_dir, model) -> dict:
 
     # 3. Infer
     print("Running model inference...")
-    dtype = torch.bfloat16
+    dtype = get_amp_dtype(device)
     with torch.no_grad():
-        with torch.amp.autocast('cuda', dtype=dtype):
+        with autocast(device, dtype=dtype):
             predictions = model(imgs[None]) # Add batch dimension
     predictions['images'] = imgs[None].permute(0, 1, 3, 4, 2)
     predictions['conf'] = torch.sigmoid(predictions['conf'])
@@ -316,7 +318,7 @@ def run_model(target_dir, model) -> dict:
             predictions[key] = predictions[key].cpu().numpy().squeeze(0)  # remove batch dimension
 
     # Clean up
-    torch.cuda.empty_cache()
+    empty_cache(device)
     return predictions
 
 
@@ -330,7 +332,7 @@ def handle_uploads(input_video, input_images, interval=-1):
     """
     start_time = time.time()
     gc.collect()
-    torch.cuda.empty_cache()
+    empty_cache()
 
     # Create a unique folder name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -428,7 +430,7 @@ def gradio_demo(
 
     start_time = time.time()
     gc.collect()
-    torch.cuda.empty_cache()
+    empty_cache()
 
     # Prepare frame_filter dropdown
     target_dir_images = os.path.join(target_dir, "images")
@@ -463,7 +465,7 @@ def gradio_demo(
     # Cleanup
     del predictions
     gc.collect()
-    torch.cuda.empty_cache()
+    empty_cache()
 
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.2f} seconds (including IO)")
@@ -563,11 +565,17 @@ skiing = "examples/skiing.mp4"
 
 if __name__ == '__main__':
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = resolve_device()
 
     print("Initializing and loading Pi3 model...")
 
-    model = Pi3.from_pretrained("yyfz233/Pi3")
+    ckpt = resolve_checkpoint("pi3")
+    if ckpt is not None:
+        print(f"Loading checkpoint: {ckpt}")
+        model = Pi3()
+        model.load_state_dict(load_checkpoint_state(ckpt))
+    else:
+        model = Pi3.from_pretrained("yyfz233/Pi3")
     # model = Pi3()
     # model.load_state_dict(torcdtype = torch.bfloat16h.load('ckpts/pi3.pt', weights_only=False, map_location=device))
 

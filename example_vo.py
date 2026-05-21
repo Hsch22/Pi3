@@ -3,6 +3,8 @@ import argparse
 import numpy as np
 import os
 from pi3.utils.basic import load_multimodal_data, write_ply
+from pi3.utils.checkpoint import load_checkpoint_state, resolve_checkpoint
+from pi3.utils.device import get_amp_dtype, resolve_device
 from pi3.models.pi3x import Pi3X
 from pi3.pipe.pi3x_vo import Pi3XVO
 
@@ -18,8 +20,8 @@ if __name__ == '__main__':
                         help="Interval to sample image. Default: 1 for images dir, 10 for video")
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Path to the model checkpoint file. Default: None")
-    parser.add_argument("--device", type=str, default='cuda',
-                        help="Device to run inference on ('cuda' or 'cpu'). Default: 'cuda'")
+    parser.add_argument("--device", type=str, default='auto',
+                        help="Device to run inference on ('auto', 'musa', 'cuda' or 'cpu'). Default: 'auto'")
                         
     args = parser.parse_args()
     if args.interval < 0:
@@ -28,16 +30,14 @@ if __name__ == '__main__':
 
     # 1. Prepare model
     print(f"Loading model...")
-    device = torch.device(args.device)
-    if args.ckpt is not None:
-        model = Pi3X().to(device).eval()
-        if args.ckpt.endswith('.safetensors'):
-            from safetensors.torch import load_file
-            weight = load_file(args.ckpt)
-        else:
-            weight = torch.load(args.ckpt, map_location=device, weights_only=False)
-        
+    device = resolve_device(args.device)
+    ckpt = resolve_checkpoint("pi3x", args.ckpt)
+    if ckpt is not None:
+        print(f"Loading checkpoint: {ckpt}")
+        model = Pi3X().eval()
+        weight = load_checkpoint_state(ckpt)
         model.load_state_dict(weight, strict=False)
+        model = model.to(device)
     else:
         model = Pi3X.from_pretrained("yyfz233/Pi3X").to(device).eval()
         # or download checkpoints from `https://huggingface.co/yyfz233/Pi3X/resolve/main/model.safetensors`, and `--ckpt ckpts/model.safetensors`
@@ -50,7 +50,7 @@ if __name__ == '__main__':
 
     # 3. Infer
     print("Running model inference...")
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    dtype = get_amp_dtype(device)
     
     with torch.no_grad():
         res = pipe(

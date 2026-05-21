@@ -1,6 +1,8 @@
 import torch
 import argparse
 from pi3.utils.basic import load_images_as_tensor, write_ply
+from pi3.utils.checkpoint import load_checkpoint_state, resolve_checkpoint
+from pi3.utils.device import autocast, get_amp_dtype, resolve_device
 from pi3.utils.geometry import depth_normal_edge
 from pi3.models.pi3 import Pi3
 
@@ -16,8 +18,8 @@ if __name__ == '__main__':
                         help="Interval to sample image. Default: 1 for images dir, 10 for video")
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Path to the model checkpoint file. Default: None")
-    parser.add_argument("--device", type=str, default='cuda',
-                        help="Device to run inference on ('cuda' or 'cpu'). Default: 'cuda'")
+    parser.add_argument("--device", type=str, default='auto',
+                        help="Device to run inference on ('auto', 'musa', 'cuda' or 'cpu'). Default: 'auto'")
                         
     args = parser.parse_args()
     if args.interval < 0:
@@ -26,16 +28,14 @@ if __name__ == '__main__':
 
     # 1. Prepare model
     print(f"Loading model...")
-    device = torch.device(args.device)
-    if args.ckpt is not None:
-        model = Pi3().to(device).eval()
-        if args.ckpt.endswith('.safetensors'):
-            from safetensors.torch import load_file
-            weight = load_file(args.ckpt)
-        else:
-            weight = torch.load(args.ckpt, map_location=device, weights_only=False)
-        
+    device = resolve_device(args.device)
+    ckpt = resolve_checkpoint("pi3", args.ckpt)
+    if ckpt is not None:
+        print(f"Loading checkpoint: {ckpt}")
+        model = Pi3().eval()
+        weight = load_checkpoint_state(ckpt)
         model.load_state_dict(weight)
+        model = model.to(device)
     else:
         model = Pi3.from_pretrained("yyfz233/Pi3").to(device).eval()
         # or download checkpoints from `https://huggingface.co/yyfz233/Pi3/resolve/main/model.safetensors`, and `--ckpt ckpts/model.safetensors`
@@ -46,9 +46,9 @@ if __name__ == '__main__':
 
     # 3. Infer
     print("Running model inference...")
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    dtype = get_amp_dtype(device)
     with torch.no_grad():
-        with torch.amp.autocast('cuda', dtype=dtype):
+        with autocast(device, dtype=dtype):
             res = model(imgs[None]) # Add batch dimension
 
     # 4. process mask

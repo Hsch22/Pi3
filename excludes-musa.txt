@@ -1,0 +1,25 @@
+# Never resolve these into the Pi3 project .venv on MUSA.
+torch
+torchvision
+torch-musa
+torch_musa
+torchaudio
+triton
+opencv-python
+cuda-bindings
+cuda-pathfinder
+cuda-toolkit
+nvidia-cublas
+nvidia-cuda-cupti
+nvidia-cuda-nvrtc
+nvidia-cuda-runtime
+nvidia-cudnn
+nvidia-cufft
+nvidia-cufile
+nvidia-curand
+nvidia-cusolver
+nvidia-cusparse
+nvidia-cusparselt
+nvidia-nccl
+nvidia-nvjitlink
+nvidia-nvtx

@@ -4,6 +4,7 @@ from functools import partial
 from copy import deepcopy
 
 from .dinov2.layers import Mlp
+from ..utils.device import disabled_autocast
 from ..utils.geometry import homogenize_points
 from .layers.pos_embed import RoPE2D, PositionGetter
 from .layers.block import BlockRope
@@ -189,7 +190,7 @@ class Pi3(nn.Module, PyTorchModelHubMixin):
         conf_hidden = self.conf_decoder(hidden, xpos=pos)
         camera_hidden = self.camera_decoder(hidden, xpos=pos)
 
-        with torch.amp.autocast(device_type='cuda', enabled=False):
+        with disabled_autocast(hidden.device):
             # local points
             point_hidden = point_hidden.float()
             ret = self.point_head([point_hidden[:, self.patch_start_idx:]], (H, W)).reshape(B, N, H, W, -1)

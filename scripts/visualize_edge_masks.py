@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pi3.models.pi3 import Pi3
 from pi3.utils.basic import load_images_as_tensor, write_ply
+from pi3.utils.device import autocast, get_device_name, resolve_device
 from pi3.utils.geometry import depth_edge, depth_normal_edge, normal_edge, points_to_normals
 
 
@@ -196,10 +197,10 @@ def main():
         ply_dir.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(min(8, max(1, os.cpu_count() or 1)))
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device()
     print(f"device={device}")
-    if device.type == "cuda":
-        print(f"gpu={torch.cuda.get_device_name(0)}")
+    if device.type in {"cuda", "musa"}:
+        print(f"gpu={get_device_name(device)}")
 
     print("loading model")
     start = time.time()
@@ -221,8 +222,8 @@ def main():
             imgs = imgs.to(device)
             infer_start = time.time()
             with torch.no_grad():
-                if device.type == "cuda":
-                    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                if device.type in {"cuda", "musa"}:
+                    with autocast(device, dtype=torch.bfloat16):
                         res = model(imgs[None])
                 else:
                     res = model(imgs[None])

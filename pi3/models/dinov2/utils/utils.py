@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import numpy as np
 import torch
 from torch import nn
+from pi3.utils.device import manual_seed_all
 
 
 # logger = logging.getLogger("dinov2")
@@ -38,7 +39,7 @@ def fix_random_seeds(seed=31):
     Fix random seeds.
     """
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
 

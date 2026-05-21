@@ -3,6 +3,8 @@ import argparse
 import numpy as np
 import os
 from pi3.utils.basic import load_multimodal_data, write_ply
+from pi3.utils.checkpoint import load_checkpoint_state, resolve_checkpoint
+from pi3.utils.device import autocast, get_amp_dtype, resolve_device
 from pi3.utils.geometry import depth_normal_edge, recover_intrinsic_from_rays_d
 from pi3.models.pi3x import Pi3X
 
@@ -23,8 +25,8 @@ if __name__ == '__main__':
                         help="Interval to sample image. Default: 1 for images dir, 10 for video")
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Path to the model checkpoint file. Default: None")
-    parser.add_argument("--device", type=str, default='cuda',
-                        help="Device to run inference on ('cuda' or 'cpu'). Default: 'cuda'")
+    parser.add_argument("--device", type=str, default='auto',
+                        help="Device to run inference on ('auto', 'musa', 'cuda' or 'cpu'). Default: 'auto'")
                         
     args = parser.parse_args()
     if args.interval < 0:
@@ -32,7 +34,7 @@ if __name__ == '__main__':
     print(f'Sampling interval: {args.interval}')
 
     # 1. Prepare input data
-    device = torch.device(args.device)
+    device = resolve_device(args.device)
 
     # Load optional conditions from .npz
     poses = None
@@ -61,14 +63,11 @@ if __name__ == '__main__':
 
     # 2. Prepare model
     print(f"Loading model...")
-    if args.ckpt is not None:
+    ckpt = resolve_checkpoint("pi3x", args.ckpt)
+    if ckpt is not None:
+        print(f"Loading checkpoint: {ckpt}")
         model = Pi3X(use_multimodal=use_multimodal).eval()
-        if args.ckpt.endswith('.safetensors'):
-            from safetensors.torch import load_file
-            weight = load_file(args.ckpt)
-        else:
-            weight = torch.load(args.ckpt, map_location=device, weights_only=False)
-        
+        weight = load_checkpoint_state(ckpt)
         model.load_state_dict(weight, strict=False)
     else:
         model = Pi3X.from_pretrained("yyfz233/Pi3X").eval()
@@ -105,10 +104,10 @@ if __name__ == '__main__':
 
     # 3. Infer
     print("Running model inference...")
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    dtype = get_amp_dtype(device)
     
     with torch.no_grad():
-        with torch.amp.autocast('cuda', dtype=dtype):
+        with autocast(device, dtype=dtype):
             res = model(
                 imgs=imgs, 
                 **conditions
