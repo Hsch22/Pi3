@@ -5,8 +5,9 @@
 # --------------------------------------------------------
 # Position embedding utils
 # --------------------------------------------------------
-
-
+import os
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -103,11 +104,47 @@ def interpolate_pos_embed(model, checkpoint_model):
 # RoPE2D: RoPE implementation in 2D
 #----------------------------------------------------------
 
+_CUROPE_ROOT = Path(os.environ.get("PI3_CUROPE_ROOT", "/mnt/workspace/users/mws/third_party/croco"))
+if (_CUROPE_ROOT / "models" / "curope").is_dir():
+    _CUROPE_ROOT_STR = str(_CUROPE_ROOT)
+    if _CUROPE_ROOT_STR not in sys.path:
+        sys.path.insert(0, _CUROPE_ROOT_STR)
+
 try:
-    from models.curope import cuRoPE2D
-    RoPE2D = cuRoPE2D
-except ImportError:
-    print('Warning, cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead')
+    from models.curope import curope as _curope_kernels
+
+    class _CuRoPE2DFunc(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, tokens, positions, base, F0=1.0):
+            ctx.save_for_backward(positions)
+            ctx.saved_base = base
+            ctx.saved_F0 = F0
+
+            output = tokens.contiguous().clone()
+            _curope_kernels.rope_2d(output, positions, base, F0)
+            return output
+
+        @staticmethod
+        def backward(ctx, grad_output):
+            (positions,) = ctx.saved_tensors
+            grad_input = grad_output.contiguous().clone()
+            _curope_kernels.rope_2d(grad_input, positions, ctx.saved_base, -ctx.saved_F0)
+            return grad_input, None, None, None
+
+    class RoPE2D(torch.nn.Module):
+
+        def __init__(self, freq=100.0, F0=1.0):
+            super().__init__()
+            self.base = freq
+            self.F0 = F0
+
+        def forward(self, tokens, positions):
+            tokens = tokens.transpose(1, 2)
+            tokens = _CuRoPE2DFunc.apply(tokens, positions.contiguous(), self.base, self.F0)
+            return tokens.transpose(1, 2)
+except ImportError as exc:
+    print(f'Warning, cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead: {exc}')
 
     class RoPE2D(torch.nn.Module):
         
