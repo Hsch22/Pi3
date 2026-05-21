@@ -17,6 +17,7 @@ import torch
 
 from torch.nn.functional import scaled_dot_product_attention
 from torch.nn.attention import SDPBackend
+from .xformers_fallback import TorchBlockDiagonalMask, add_attention_bias, block_diagonal_attention
 
 XFORMERS_ENABLED = os.environ.get("XFORMERS_DISABLED") is None
 try:
@@ -73,7 +74,20 @@ class MemEffAttention(Attention):
     def forward(self, x: Tensor, attn_bias=None) -> Tensor:
         if not XFORMERS_AVAILABLE:
             if attn_bias is not None:
-                raise AssertionError("xFormers is required for using nested tensors")
+                B, N, C = x.shape
+                qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+                q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
+                if isinstance(attn_bias, TorchBlockDiagonalMask):
+                    x = block_diagonal_attention(q, k, v, attn_bias, self.attn_drop)
+                else:
+                    attn = add_attention_bias(q @ k.transpose(-2, -1), attn_bias)
+                    attn = attn.softmax(dim=-1)
+                    attn = self.attn_drop(attn)
+                    x = attn @ v
+                x = x.transpose(1, 2).reshape(B, N, C)
+                x = self.proj(x)
+                x = self.proj_drop(x)
+                return x
             return super().forward(x)
 
         B, N, C = x.shape
@@ -176,8 +190,7 @@ class CrossAttentionRope(nn.Module):
 
         # Compute attention scores
         attn = q @ k.transpose(-2, -1)  # (B, num_heads, N, M)
-        if attn_bias is not None:
-            attn = attn + attn_bias
+        attn = add_attention_bias(attn, attn_bias)
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -203,9 +216,7 @@ class MemEffCrossAttentionRope(CrossAttentionRope):
             Tensor of shape (B, N, C), output of cross-attention
         """
         if not XFORMERS_AVAILABLE:
-            if attn_bias is not None:
-                raise AssertionError("xFormers is required for using nested tensors")
-            return super().forward(query, key, value, attn_bias)
+            return super().forward(query, key, value, attn_bias, qpos=qpos, kpos=kpos)
 
         B, N, C = query.shape
         _, M, _ = key.shape
@@ -276,6 +287,7 @@ class AttentionRope(nn.Module):
         
         q = q * self.scale
         attn = q @ k.transpose(-2, -1)
+        attn = add_attention_bias(attn, attn_bias)
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -289,9 +301,7 @@ class AttentionRope(nn.Module):
 class MemEffAttentionRope(AttentionRope):
     def forward(self, x: Tensor, attn_bias=None, xpos=None) -> Tensor:
         if not XFORMERS_AVAILABLE:
-            if attn_bias is not None:
-                raise AssertionError("xFormers is required for using nested tensors")
-            return super().forward(x)
+            return super().forward(x, attn_bias=attn_bias, xpos=xpos)
 
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)

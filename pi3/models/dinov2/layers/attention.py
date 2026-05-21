@@ -13,6 +13,7 @@ import warnings
 
 from torch import Tensor
 from torch import nn
+from ...layers.xformers_fallback import TorchBlockDiagonalMask, add_attention_bias, block_diagonal_attention
 
 
 logger = logging.getLogger("dinov2")
@@ -73,7 +74,20 @@ class MemEffAttention(Attention):
     def forward(self, x: Tensor, attn_bias=None) -> Tensor:
         if not XFORMERS_AVAILABLE:
             if attn_bias is not None:
-                raise AssertionError("xFormers is required for using nested tensors")
+                B, N, C = x.shape
+                qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+                q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
+                if isinstance(attn_bias, TorchBlockDiagonalMask):
+                    x = block_diagonal_attention(q, k, v, attn_bias, self.attn_drop)
+                else:
+                    attn = add_attention_bias(q @ k.transpose(-2, -1), attn_bias)
+                    attn = attn.softmax(dim=-1)
+                    attn = self.attn_drop(attn)
+                    x = attn @ v
+                x = x.transpose(1, 2).reshape(B, N, C)
+                x = self.proj(x)
+                x = self.proj_drop(x)
+                return x
             return super().forward(x)
 
         B, N, C = x.shape

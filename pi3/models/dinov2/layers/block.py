@@ -19,6 +19,9 @@ from .attention import Attention, MemEffAttention
 from .drop_path import DropPath
 from .layer_scale import LayerScale
 from .mlp import Mlp
+from ...layers.xformers_fallback import TorchBlockDiagonalMask
+from ...layers.xformers_fallback import index_select_cat as torch_index_select_cat
+from ...layers.xformers_fallback import scaled_index_add as torch_scaled_index_add
 
 
 logger = logging.getLogger("dinov2")
@@ -36,6 +39,9 @@ try:
         raise ImportError
 except ImportError:
     XFORMERS_AVAILABLE = False
+    fmha = None
+    scaled_index_add = torch_scaled_index_add
+    index_select_cat = torch_index_select_cat
     # warnings.warn("xFormers is not available (Block)")
 
 
@@ -171,7 +177,10 @@ def get_attn_bias_and_cat(x_list, branges=None):
         for b, x in zip(batch_sizes, x_list):
             for _ in range(b):
                 seqlens.append(x.shape[1])
-        attn_bias = fmha.BlockDiagonalMask.from_seqlens(seqlens)
+        if XFORMERS_AVAILABLE:
+            attn_bias = fmha.BlockDiagonalMask.from_seqlens(seqlens)
+        else:
+            attn_bias = TorchBlockDiagonalMask.from_seqlens(seqlens)
         attn_bias._batch_sizes = batch_sizes
         attn_bias_cache[all_shapes] = attn_bias
 
@@ -252,8 +261,6 @@ class NestedTensorBlock(Block):
         if isinstance(x_or_x_list, Tensor):
             return super().forward(x_or_x_list)
         elif isinstance(x_or_x_list, list):
-            if not XFORMERS_AVAILABLE:
-                raise AssertionError("xFormers is required for using nested tensors")
             return self.forward_nested(x_or_x_list)
         else:
             raise AssertionError
