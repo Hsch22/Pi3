@@ -14,14 +14,18 @@ MUSA changes:
 - C++ device dispatch checks `c10::DeviceType::PrivateUse1` for MUSA tensors.
 - Python import path stays compatible with CroCo/Pi3: `from models.curope import cuRoPE2D`.
 
-Build:
+Default use in Pi3:
+
+`scripts/run_musa.sh` sets this directory as the first `PYTHONPATH` entry by default and builds the extension on first use when `curope*.so` is missing.
+
+Manual build:
 
 ```bash
 cd /datapool/husicheng/Pi3/third_party/croco_musa/models/curope
 /datapool/husicheng/Pi3/.venv/bin/python setup.py build_ext --inplace
 ```
 
-Use from Pi3 without copying into the repo root:
+Manual use from Pi3 without `scripts/run_musa.sh`:
 
 ```bash
 PYTHONPATH=/datapool/husicheng/Pi3/third_party/croco_musa \

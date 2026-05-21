@@ -17,15 +17,16 @@
 
 当前实际路径：
 
-- 如果不设置 `PYTHONPATH`，Pi3 仍会走 `pos_embed.py` 内部的纯 PyTorch `RoPE2D` fallback。
-- 设置 `PYTHONPATH=/datapool/husicheng/Pi3/third_party/croco_musa` 后，`pi3.models.layers.pos_embed.RoPE2D` 可以解析为 `models.curope.curope2d.cuRoPE2D`。
+- `scripts/run_musa.sh` 默认设置 `PYTHONPATH=/datapool/husicheng/Pi3/third_party/croco_musa:${PYTHONPATH}`。
+- `scripts/run_musa.sh` 默认启用 `PI3_ENABLE_CROCO_MUSA=1`，首次缺少 `curope*.so` 时会在 MUSA 容器内自动执行 `setup.py build_ext --inplace`。
+- 默认路径生效后，`pi3.models.layers.pos_embed.RoPE2D` 可以解析为 `models.curope.curope2d.cuRoPE2D`。
+- 如需临时关闭该路径，可运行 `PI3_ENABLE_CROCO_MUSA=0 bash scripts/run_musa.sh ...`，此时 Pi3 会回到 `pos_embed.py` 内部的纯 PyTorch `RoPE2D` fallback。
 - MUSA cuRoPE 适配版已通过 forward/backward smoke；float32 前向相对 PyTorch fallback 最大误差 `4.768e-07`，bfloat16 最大误差 `4.688e-02`、平均误差 `1.855e-03`。
 - `(B,H,N,D)=(1,16,3136,64)` 下，cached PyTorch fallback 约 `0.44-0.45 ms`，MUSA cuRoPE in-place kernel 约 `0.06-0.09 ms`。
 
 后续处理方向：
 
-- 决定是否将 `third_party/croco_musa/models/curope` 正式接入仓库或安装流程。
-- 如果正式接入，需要补充构建脚本、运行入口的 `PYTHONPATH`/安装步骤，以及 CI/smoke 验证。
+- 后续可考虑把首次自动构建拆成独立 install/build 命令，减少首次运行的启动耗时。
 - bfloat16 误差来自低精度路径，需要结合 Pi3/Pi3X 端到端输出确认是否接受。
 
 ## 2. xFormers 缺失

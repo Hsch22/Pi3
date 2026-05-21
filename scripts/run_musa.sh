@@ -6,6 +6,7 @@ PROJECT_ROOT="${PI3_PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 IMAGE_TAG="${PI3_IMAGE:-registry.mthreads.com/mcctest/ai/mtwan:4.3.3-pt2.7-v0.2-mudnn3.1.7-ph1}"
 SHARED_IMAGE_LOADER="${PI3_SHARED_IMAGE_LOADER:-/datapool/shared_images/mtwan_4.3.3-pt2.7-v0.2-mudnn3.1.7-ph1/load_mtwan.sh}"
 PROXY_ENV="${PI3_PROXY_ENV:-/datapool/.config/mihomo/proxy-env.sh}"
+CROCO_MUSA_PATH="${PI3_CROCO_MUSA_PATH:-${PROJECT_ROOT}/third_party/croco_musa}"
 
 if [ "$#" -eq 0 ]; then
   set -- bash
@@ -28,6 +29,8 @@ docker run --rm -i \
   -e PI3_PYPI_MIRROR="${PI3_PYPI_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
   -e PI3_PYPI_FALLBACK="${PI3_PYPI_FALLBACK:-https://pypi.org/simple}" \
   -e PI3_PROXY_ENV="${PROXY_ENV}" \
+  -e PI3_CROCO_MUSA_PATH="${CROCO_MUSA_PATH}" \
+  -e PI3_ENABLE_CROCO_MUSA="${PI3_ENABLE_CROCO_MUSA:-1}" \
   -e PI3_INSTALL_DEMO="${PI3_INSTALL_DEMO:-0}" \
   -e MODELSCOPE_TOKEN="${MODELSCOPE_TOKEN:-}" \
   -e UV_LINK_MODE="${UV_LINK_MODE:-copy}" \
@@ -37,6 +40,17 @@ docker run --rm -i \
   "${IMAGE_TAG}" \
   bash -lc '
     set -euo pipefail
+    if [ "${PI3_ENABLE_CROCO_MUSA:-1}" = "1" ] && [ -d "${PI3_CROCO_MUSA_PATH}" ]; then
+      export PYTHONPATH="${PI3_CROCO_MUSA_PATH}${PYTHONPATH:+:${PYTHONPATH}}"
+    fi
     bash scripts/bootstrap_musa_uv.sh
+    if [ "${PI3_ENABLE_CROCO_MUSA:-1}" = "1" ] && [ -d "${PI3_CROCO_MUSA_PATH}" ]; then
+      if ! ls "${PI3_CROCO_MUSA_PATH}/models/curope"/curope*.so >/dev/null 2>&1; then
+        (cd "${PI3_CROCO_MUSA_PATH}/models/curope" && "${PI3_VENV_DIR}/bin/python" setup.py build_ext --inplace)
+        chown -R "${PI3_HOST_UID}:${PI3_HOST_GID}" \
+          "${PI3_CROCO_MUSA_PATH}/models/curope/build" \
+          "${PI3_CROCO_MUSA_PATH}/models/curope"/curope*.so 2>/dev/null || true
+      fi
+    fi
     exec "$@"
   ' bash "$@"
