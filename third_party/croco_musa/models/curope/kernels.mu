@@ -87,7 +87,7 @@ void rope_2d_musa( torch::Tensor tokens, const torch::Tensor pos, const float ba
     const int H = tokens.size(2); // number of heads
     const int D = tokens.size(3); // dimension per head
 
-    TORCH_CHECK(tokens.stride(3) == 1 && tokens.stride(2) == D, "tokens are not contiguous");
+    TORCH_CHECK(tokens.stride(3) == 1, "last token dimension is not contiguous");
     TORCH_CHECK(pos.is_contiguous(), "positions are not contiguous");
     TORCH_CHECK(pos.size(0) == B && pos.size(1) == N && pos.size(2) == 2, "bad pos.shape");
     TORCH_CHECK(D % 4 == 0, "token dim must be multiple of 4");

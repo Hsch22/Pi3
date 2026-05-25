@@ -45,11 +45,27 @@ docker run --rm -i \
     fi
     bash scripts/bootstrap_musa_uv.sh
     if [ "${PI3_ENABLE_CROCO_MUSA:-1}" = "1" ] && [ -d "${PI3_CROCO_MUSA_PATH}" ]; then
-      if ! ls "${PI3_CROCO_MUSA_PATH}/models/curope"/curope*.so >/dev/null 2>&1; then
-        (cd "${PI3_CROCO_MUSA_PATH}/models/curope" && "${PI3_VENV_DIR}/bin/python" setup.py build_ext --inplace)
+      CUROPE_DIR="${PI3_CROCO_MUSA_PATH}/models/curope"
+      CUROPE_SO=""
+      for path in "${CUROPE_DIR}"/curope*.so; do
+        if [ -e "$path" ]; then
+          CUROPE_SO="$path"
+          break
+        fi
+      done
+      CUROPE_NEEDS_BUILD=0
+      if [ -z "${CUROPE_SO}" ]; then
+        CUROPE_NEEDS_BUILD=1
+      elif [ "${CUROPE_DIR}/setup.py" -nt "${CUROPE_SO}" ] || \
+           [ "${CUROPE_DIR}/curope.cpp" -nt "${CUROPE_SO}" ] || \
+           [ "${CUROPE_DIR}/kernels.mu" -nt "${CUROPE_SO}" ]; then
+        CUROPE_NEEDS_BUILD=1
+      fi
+      if [ "${CUROPE_NEEDS_BUILD}" = "1" ]; then
+        (cd "${CUROPE_DIR}" && "${PI3_VENV_DIR}/bin/python" setup.py build_ext --inplace)
         chown -R "${PI3_HOST_UID}:${PI3_HOST_GID}" \
-          "${PI3_CROCO_MUSA_PATH}/models/curope/build" \
-          "${PI3_CROCO_MUSA_PATH}/models/curope"/curope*.so 2>/dev/null || true
+          "${CUROPE_DIR}/build" \
+          "${CUROPE_DIR}"/curope*.so 2>/dev/null || true
       fi
     fi
     exec "$@"
